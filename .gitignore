@@ -1,0 +1,35 @@
+# Unity generated folders
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]serSettings/
+[Mm]emoryCaptures/
+
+# Asset Store tools
+/Assets/AssetStoreTools*
+
+# IDE and tool caches
+.vs/
+.vscode/
+.idea/
+.gradle/
+
+# Visual Studio / Rider / MonoDevelop files
+*.csproj
+*.sln
+*.user
+*.userprefs
+*.unityproj
+*.booproj
+*.pidb
+*.svd
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Crashlytics
+crashlytics-build.properties
