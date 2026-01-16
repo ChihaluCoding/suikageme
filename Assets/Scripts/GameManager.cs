@@ -175,7 +175,6 @@ public class GameManager : MonoBehaviour
         CreateBackground();
         CreatePlayfield();
         CreateBinVisual();
-        CreateTopLine();
         CreateScoreText();
         CreateNextPanel();
         CreateChainPanel();
@@ -618,25 +617,6 @@ public class GameManager : MonoBehaviour
         wall.transform.SetParent(transform);
         BoxCollider2D collider = wall.AddComponent<BoxCollider2D>();
         collider.size = size;
-    }
-
-    private void CreateTopLine()
-    {
-        PlayBounds bounds = GetInnerBounds();
-        float lineY = Mathf.Clamp(topLineY, bounds.floor + maxFruitRadius * 2f, bounds.ceiling - maxFruitRadius * 0.5f);
-        GameObject line = new GameObject("TopLine");
-        line.transform.SetParent(transform);
-        LineRenderer renderer = line.AddComponent<LineRenderer>();
-        renderer.positionCount = 2;
-        renderer.SetPosition(0, new Vector3(bounds.left, lineY, 0f));
-        renderer.SetPosition(1, new Vector3(bounds.right, lineY, 0f));
-        renderer.startWidth = 0.06f;
-        renderer.endWidth = 0.06f;
-        renderer.material = new Material(Shader.Find("Sprites/Default"));
-        renderer.startColor = new Color(0.95f, 0.4f, 0.62f, 0.85f);
-        renderer.endColor = renderer.startColor;
-        renderer.sortingOrder = BinOutlineSortingOrder + 2;
-        topLineY = lineY;
     }
 
     private void CreateNextPanel()
