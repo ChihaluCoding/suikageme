@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -57,7 +58,7 @@ public class GameManager : MonoBehaviour
     public float ceilingY = 6.2f;     // 箱の天井Y
     // ★ スポーン位置やトップラインを上下に動かしたいとき
     public float spawnY = 15.5f;       // スポーン初期Y
-    public float topLineY = 3.8f;     // トップラインY
+    public float topLineY = 1.5f;     // トップラインY
     public float wallThickness = 0.5f; // 壁コライダーの厚み
     [Header("Box Offset")]
     public float boxOffsetX = 0f; // 箱の横オフセット
@@ -70,9 +71,9 @@ public class GameManager : MonoBehaviour
     public float innerPaddingBottom = -0.94f;
     public float innerPaddingTop = -2f;
     [Header("Inner Bounds Min Size")]
-    public float minWidthRadiusMultiplier = 5f; // 幅の最小値 = 最大半径 * これ
+    public float minWidthRadiusMultiplier = 5f; // 幅の最小値 = 最大半径
     public float minWidthExtra = 0.1f; // 幅の最小値に足す固定値
-    public float minHeightRadiusMultiplier = 2f; // 高さの最小値 = 最大半径 * これ
+    public float minHeightRadiusMultiplier = 2f; // 高さの最小値 = 最大半径
     public float minHeightExtra = 0.1f; // 高さの最小値に足す固定値
     // 内側余白は固定値に戻す（必要ならまた有効化）
     // [Header("Playfield Padding (relative to bin)")]
@@ -81,15 +82,33 @@ public class GameManager : MonoBehaviour
     // [Range(0f, 0.4f)] public float innerBottomNorm = 0.05f;
     // [Range(0f, 0.4f)] public float innerTopNorm = 0.05f;
     [Header("Layout Offsets")]
-    // トップラインとスポーン位置の調整量
+    // トップラインの箱天井からの下げ量（useTopLineY=falseのときに使用）
     public float topLineMargin = 0.2f;
     public float spawnBelowTopLine = 0.5f;
     [Header("Spawn Height")]
     public bool useSpawnY = true; // spawnY を固定値として使う
     [Header("Game Over Line")]
-    public bool useTopLineY = true; // topLineY を判定ラインとして使う
+    public bool useTopLineY = true; // true=topLineYを固定値として使う
+    public float topLineOffsetNorm = -0.12f; // 箱の高さに対するオフセット（マイナスで下げる）
     [Range(0f, 1f)]
-    public float gameOverRadiusFactor = 0.5f; // 0=中心, 1=上端で判定
+    public float gameOverRadiusFactor = 0.8f; // 0=中心, 1=上端で判定
+    [Range(0f, 2f)]
+    public float gameOverGraceTime = 0.35f; // 落下直後の猶予秒数
+    public float gameOverStillSpeed = 0.25f; // これ以下の速度なら停止扱い
+    [Header("Game Over UI")]
+    public float gameOverUiOffsetY = -0.5f;
+    public float gameOverTextOffsetY = 2.6f;
+    public float gameOverButtonWidth = 4.2f;
+    public float gameOverButtonHeight = 2.1f;
+    public float gameOverButtonSpacing = 0.35f;
+    [Header("Audio")]
+    public bool playBgm = true;
+    [Range(0f, 1f)]
+    public float bgmVolume = 0.15f;
+    public string bgmResource = "bgm_loop";
+    [Header("BGM Toggle UI")]
+    public float bgmButtonSize = 1.4f;
+    public float bgmButtonMargin = 0.4f;
 
     // 箱の見た目の外枠（スケール/オフセット反映）
     private PlayBounds GetBoxBounds()
@@ -165,11 +184,18 @@ public class GameManager : MonoBehaviour
     private SpriteRenderer nextFruitRenderer;
     private LineRenderer gameOverLine;
     private GameObject gameOverUi;
+    private TextMesh gameOverText;
     private TextMesh retryText;
     private TextMesh titleText;
     private Sprite retryButtonSprite;
     private Sprite titleButtonSprite;
+    private Component bgmSource;
+    private Type audioSourceType;
+    private Sprite bgmOnSprite;
+    private Sprite bgmOffSprite;
+    private SpriteRenderer bgmButtonRenderer;
     private bool canDrop = true;
+    private bool spawnRoutineRunning = false;
     private bool isGameOver;
     private int score;
     private int bestScore;
@@ -195,7 +221,9 @@ public class GameManager : MonoBehaviour
         CreateScoreText();
         CreateNextPanel();
         CreateChainPanel();
+        CreateBgmToggleButton();
         CreateGameOverButtons();
+        EnsureBgm();
     }
 
     private void Start()
@@ -217,6 +245,12 @@ public class GameManager : MonoBehaviour
 
         HandleAim();
         HandleDropInput();
+        // 万一スポーンが途切れたときのフェイルセーフ
+        if (!isGameOver && !spawnRoutineRunning && currentFruit == null)
+        {
+            canDrop = true;
+            SpawnPreview();
+        }
         CheckGameOver();
         UpdateGameOverLine();
     }
@@ -308,17 +342,25 @@ public class GameManager : MonoBehaviour
         body.gravityScale = 1f;
         body.angularDrag = 0.05f;
         currentFruit.SetPreview(false);
+        currentFruit.MarkDropped();
 
         currentFruit = null;
         canDrop = false;
+        spawnRoutineRunning = true;
         StartCoroutine(SpawnAfterDelay());
     }
 
     private IEnumerator SpawnAfterDelay()
     {
-        yield return new WaitForSeconds(nextSpawnDelay);
+        yield return new WaitForSecondsRealtime(nextSpawnDelay);
+        if (isGameOver)
+        {
+            spawnRoutineRunning = false;
+            yield break;
+        }
         canDrop = true;
         SpawnPreview();
+        spawnRoutineRunning = false;
     }
 
     private void SpawnPreview()
@@ -343,7 +385,7 @@ public class GameManager : MonoBehaviour
     private int GetRandomSpawnIndex()
     {
         int maxType = Mathf.Clamp(spawnTypeCount, 1, fruitDefinitions.Count);
-        return Random.Range(0, maxType);
+        return UnityEngine.Random.Range(0, maxType);
     }
 
     private Fruit CreateFruit(int typeIndex, Vector3 position, bool isPreview)
@@ -430,13 +472,18 @@ public class GameManager : MonoBehaviour
     private void RefreshVerticalLayout()
     {
         PlayBounds bounds = GetInnerBounds();
+        PlayBounds box = GetBoxBounds();
 
         float minTopLine = bounds.floor + maxFruitRadius * 2f + 0.1f;
-        float maxTopLine = bounds.ceiling - maxFruitRadius * 0.5f;
+        float maxTopLine = box.ceiling - 0.05f;
         if (!useTopLineY)
         {
-            float targetTopLine = bounds.ceiling - Mathf.Max(topLineMargin, maxFruitRadius * 0.25f);
-            topLineY = Mathf.Max(minTopLine, targetTopLine);
+            float targetTopLine = box.ceiling - topLineMargin;
+            topLineY = Mathf.Clamp(targetTopLine, minTopLine, maxTopLine);
+        }
+        else
+        {
+            topLineY = Mathf.Clamp(topLineY, minTopLine, maxTopLine);
         }
 
         float minSpawn = bounds.floor + maxFruitRadius + 0.1f;
@@ -496,6 +543,8 @@ public class GameManager : MonoBehaviour
     {
         retryButtonSprite = LoadSpriteFlexible("retry_button");
         titleButtonSprite = LoadSpriteFlexible("title_button");
+        bgmOnSprite = LoadSpriteFlexible("bgm_on");
+        bgmOffSprite = LoadSpriteFlexible("bgm_off");
     }
 
     private Sprite LoadSpriteFlexible(string resourceName)
@@ -530,6 +579,85 @@ public class GameManager : MonoBehaviour
         GameObject root = new GameObject("UIRoot");
         root.transform.SetParent(transform);
         uiRoot = root.transform;
+    }
+
+    private void EnsureBgm()
+    {
+        if (!playBgm || bgmSource != null)
+        {
+            return;
+        }
+
+        UnityEngine.Object clip = Resources.Load(bgmResource);
+        if (clip == null)
+        {
+            return;
+        }
+
+        Type audioType = Type.GetType("UnityEngine.AudioSource, UnityEngine.AudioModule");
+        if (audioType == null)
+        {
+            return;
+        }
+
+        Component source = gameObject.AddComponent(audioType);
+        audioType.GetProperty("clip")?.SetValue(source, clip);
+        audioType.GetProperty("loop")?.SetValue(source, true);
+        audioType.GetProperty("volume")?.SetValue(source, bgmVolume);
+        audioType.GetMethod("Play", Type.EmptyTypes)?.Invoke(source, null);
+        bgmSource = source;
+        audioSourceType = audioType;
+    }
+
+    private void ToggleBgm()
+    {
+        playBgm = !playBgm;
+
+        if (playBgm)
+        {
+            EnsureBgm();
+            if (bgmSource != null && audioSourceType != null)
+            {
+                audioSourceType.GetProperty("volume")?.SetValue(bgmSource, bgmVolume);
+                audioSourceType.GetMethod("Play", Type.EmptyTypes)?.Invoke(bgmSource, null);
+            }
+        }
+        else
+        {
+            if (bgmSource != null && audioSourceType != null)
+            {
+                audioSourceType.GetMethod("Stop", Type.EmptyTypes)?.Invoke(bgmSource, null);
+            }
+        }
+
+        UpdateBgmButtonVisual();
+    }
+
+    private void UpdateBgmButtonVisual()
+    {
+        if (bgmButtonRenderer == null)
+        {
+            return;
+        }
+
+        Sprite use = playBgm ? (bgmOnSprite ?? bgmOffSprite) : (bgmOffSprite ?? bgmOnSprite);
+        float size = Mathf.Max(0.2f, bgmButtonSize);
+        float scale;
+        if (use != null)
+        {
+            float maxSide = Mathf.Max(0.0001f, Mathf.Max(use.bounds.size.x, use.bounds.size.y));
+            scale = size / maxSide;
+            bgmButtonRenderer.sprite = use;
+            bgmButtonRenderer.color = Color.white;
+        }
+        else
+        {
+            scale = size;
+            bgmButtonRenderer.sprite = GetSolidSprite();
+            bgmButtonRenderer.color = AccentSoftColor;
+        }
+
+        bgmButtonRenderer.transform.localScale = new Vector3(scale, scale, 1f);
     }
 
     private Vector2 GetCameraBounds()
@@ -606,10 +734,10 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        PlayBounds bounds = GetInnerBounds();
-        float lineY = useTopLineY ? topLineY : bounds.ceiling;
-        gameOverLine.SetPosition(0, new Vector3(bounds.left, lineY, 0f));
-        gameOverLine.SetPosition(1, new Vector3(bounds.right, lineY, 0f));
+        PlayBounds box = GetBoxBounds();
+        float lineY = GetGameOverLineY(box);
+        gameOverLine.SetPosition(0, new Vector3(box.left, lineY, 0f));
+        gameOverLine.SetPosition(1, new Vector3(box.right, lineY, 0f));
     }
 
     private void CreateBinVisual()
@@ -775,6 +903,56 @@ public class GameManager : MonoBehaviour
             iconRenderer.sortingOrder = UiTextSortingOrder + 1;
             icon.transform.localScale = new Vector3(ChainIconSize, ChainIconSize, 1f);
         }
+    }
+
+    private void CreateBgmToggleButton()
+    {
+        if (mainCamera == null || uiRoot == null)
+        {
+            return;
+        }
+
+        Vector2 bounds = GetCameraBounds();
+        float size = Mathf.Max(0.2f, bgmButtonSize);
+        Vector3 pos = new Vector3(-bounds.x + bgmButtonMargin + size * 0.5f,
+            -bounds.y + bgmButtonMargin + size * 0.5f, 0f);
+
+        GameObject button = new GameObject("BgmToggleButton");
+        button.transform.SetParent(uiRoot);
+        button.transform.position = pos;
+
+        bgmButtonRenderer = button.AddComponent<SpriteRenderer>();
+        bgmButtonRenderer.sortingOrder = UiSortingOrder + 7;
+
+        Sprite use = playBgm ? (bgmOnSprite ?? bgmOffSprite) : (bgmOffSprite ?? bgmOnSprite);
+        float scale = 1f;
+        Vector2 colliderBaseSize = Vector2.one;
+        if (use != null)
+        {
+            Vector2 spriteSize = use.bounds.size;
+            float maxSide = Mathf.Max(0.0001f, Mathf.Max(spriteSize.x, spriteSize.y));
+            scale = size / maxSide;
+            colliderBaseSize = spriteSize;
+            bgmButtonRenderer.sprite = use;
+            bgmButtonRenderer.color = Color.white;
+        }
+        else
+        {
+            bgmButtonRenderer.sprite = GetSolidSprite();
+            bgmButtonRenderer.color = AccentSoftColor;
+            scale = size;
+            colliderBaseSize = Vector2.one;
+        }
+        button.transform.localScale = new Vector3(scale, scale, 1f);
+
+        BoxCollider2D collider = button.AddComponent<BoxCollider2D>();
+        collider.isTrigger = true;
+        collider.size = colliderBaseSize;
+
+        GameOverButtonHandler handler = button.AddComponent<GameOverButtonHandler>();
+        handler.Init(ToggleBgm);
+
+        UpdateBgmButtonVisual();
     }
 
     private void UpdateNextPreview()
@@ -1044,7 +1222,8 @@ public class GameManager : MonoBehaviour
     private void CheckGameOver()
     {
         PlayBounds bounds = GetInnerBounds();
-        float lineY = useTopLineY ? topLineY : bounds.ceiling;
+        PlayBounds box = GetBoxBounds();
+        float lineY = GetGameOverLineY(box);
 
         foreach (Fruit fruit in activeFruits)
         {
@@ -1057,38 +1236,53 @@ public class GameManager : MonoBehaviour
             if (body != null && body.bodyType == RigidbodyType2D.Dynamic)
             {
                 float checkY = fruit.transform.position.y + fruit.Radius * gameOverRadiusFactor;
+                bool aboveLine = checkY > lineY;
                 if (!fruit.HasEnteredPlayfield && checkY <= lineY)
                 {
                     fruit.MarkEnteredPlayfield();
                 }
 
-                if (fruit.HasEnteredPlayfield && checkY > lineY)
+                if (fruit.HasEnteredPlayfield && aboveLine)
                 {
                     TriggerGameOver();
                     return;
                 }
+
+                if (!fruit.HasEnteredPlayfield && fruit.HasDropped && aboveLine)
+                {
+                    if (Time.time - fruit.DroppedAt >= gameOverGraceTime)
+                    {
+                        float stillSpeedSq = gameOverStillSpeed * gameOverStillSpeed;
+                        if (body.velocity.sqrMagnitude <= stillSpeedSq || body.IsSleeping())
+                        {
+                            TriggerGameOver();
+                            return;
+                        }
+                    }
+                }
             }
         }
+    }
+
+    private float GetGameOverLineY(PlayBounds box)
+    {
+        PlayBounds bounds = GetInnerBounds();
+        float minTopLine = bounds.floor + maxFruitRadius * 2f + 0.1f;
+        float maxTopLine = box.ceiling - 0.05f;
+        float baseLine = useTopLineY ? topLineY : (box.ceiling - topLineMargin);
+        float offset = topLineOffsetNorm * (box.ceiling - box.floor);
+        float lineY = baseLine + offset;
+        return Mathf.Clamp(lineY, minTopLine, maxTopLine);
     }
 
     private void TriggerGameOver()
     {
         isGameOver = true;
         Time.timeScale = 0f;
-
-        GameObject overTextObj = new GameObject("GameOverText");
-        overTextObj.transform.SetParent(transform);
-        overTextObj.transform.position = new Vector3(0f, 1f, 0f);
-
-        TextMesh overText = overTextObj.AddComponent<TextMesh>();
-        overText.anchor = TextAnchor.MiddleCenter;
-        overText.fontSize = 96;
-        overText.characterSize = 0.1f;
-        overText.color = new Color(0.9f, 0.15f, 0.15f);
-        overText.text = "GAME OVER\nPress R to Restart";
-        MeshRenderer renderer = overTextObj.GetComponent<MeshRenderer>();
-        renderer.sortingOrder = UiTextSortingOrder + 5;
-
+        if (gameOverUi == null)
+        {
+            CreateGameOverButtons();
+        }
         if (gameOverUi != null)
         {
             gameOverUi.SetActive(true);
@@ -1120,6 +1314,8 @@ public class GameManager : MonoBehaviour
         {
             gameOverUi.SetActive(false);
         }
+
+        spawnRoutineRunning = false;
     }
 
     private void CreateGameOverButtons()
@@ -1130,24 +1326,50 @@ public class GameManager : MonoBehaviour
         }
 
         gameOverUi = new GameObject("GameOverUI");
-        gameOverUi.transform.SetParent(transform);
-        gameOverUi.transform.position = new Vector3(0f, -0.5f, 0f);
+        gameOverUi.transform.SetParent(uiRoot != null ? uiRoot : transform);
+        gameOverUi.transform.position = new Vector3(0f, gameOverUiOffsetY, 0f);
 
-        Vector2 buttonSize = new Vector2(3.2f, 0.9f);
+        Vector2 buttonSize = new Vector2(gameOverButtonWidth, gameOverButtonHeight);
+        float stackHeight = gameOverButtonHeight * 2f + gameOverButtonSpacing;
+        float topButtonY = stackHeight * 0.5f - gameOverButtonHeight * 0.5f;
 
-        CreateGameOverButton("RetryButton", retryButtonSprite, new Vector3(0f, 0.55f, 0f), buttonSize,
-            "RETRY", ref retryText);
-        CreateGameOverButton("TitleButton", titleButtonSprite, new Vector3(0f, -0.55f, 0f), buttonSize,
-            "TITLE", ref titleText);
+        CreateGameOverButton("RetryButton", retryButtonSprite, new Vector3(0f, topButtonY, 0f), buttonSize,
+            "RETRY", ref retryText, Restart);
+        CreateGameOverButton("TitleButton", titleButtonSprite, new Vector3(0f, -topButtonY, 0f), buttonSize,
+            "TITLE", ref titleText, null);
 
         gameOverUi.SetActive(false);
     }
 
-    private void CreateGameOverButton(string name, Sprite sprite, Vector3 localPosition, Vector2 size, string fallbackText, ref TextMesh text)
+    private void CreateGameOverText()
+    {
+        if (gameOverText != null || gameOverUi == null)
+        {
+            return;
+        }
+
+        GameObject overTextObj = new GameObject("GameOverText");
+        overTextObj.transform.SetParent(gameOverUi.transform);
+        overTextObj.transform.localPosition = new Vector3(0f, gameOverTextOffsetY, 0f);
+
+        gameOverText = overTextObj.AddComponent<TextMesh>();
+        gameOverText.anchor = TextAnchor.MiddleCenter;
+        gameOverText.fontSize = 96;
+        gameOverText.characterSize = 0.1f;
+        gameOverText.color = new Color(0.9f, 0.15f, 0.15f);
+        gameOverText.text = "GAME OVER\nPress R to Restart";
+        MeshRenderer renderer = overTextObj.GetComponent<MeshRenderer>();
+        renderer.sortingOrder = UiTextSortingOrder + 5;
+    }
+
+    private void CreateGameOverButton(string name, Sprite sprite, Vector3 localPosition, Vector2 size, string fallbackText, ref TextMesh text, Action onClick)
     {
         GameObject button = new GameObject(name);
         button.transform.SetParent(gameOverUi.transform);
         button.transform.localPosition = localPosition;
+        BoxCollider2D collider = button.AddComponent<BoxCollider2D>();
+        collider.size = size;
+        collider.isTrigger = true;
 
         if (sprite != null)
         {
@@ -1157,14 +1379,20 @@ public class GameManager : MonoBehaviour
             Vector2 spriteSize = sprite.bounds.size;
             float scaleX = size.x / Mathf.Max(0.0001f, spriteSize.x);
             float scaleY = size.y / Mathf.Max(0.0001f, spriteSize.y);
-            button.transform.localScale = new Vector3(scaleX, scaleY, 1f);
-            return;
+            float scale = Mathf.Min(scaleX, scaleY);
+            button.transform.localScale = new Vector3(scale, scale, 1f);
+        }
+        else
+        {
+            Transform panel = CreatePanel(name + "_Panel", button.transform, Vector3.zero, size,
+                PanelFillColor, PanelBorderColor, UiSortingOrder + 5, UiSortingOrder + 6, PanelBorder, true);
+            text = CreateUIText(name + "_Text", panel, Vector3.zero, 72, 0.04f, TextAnchor.MiddleCenter,
+                AccentColor, UiTextSortingOrder + 6, true);
+            SetTextWithShadow(text, fallbackText);
         }
 
-        Transform panel = CreatePanel(name + "_Panel", button.transform, Vector3.zero, size,
-            PanelFillColor, PanelBorderColor, UiSortingOrder + 5, UiSortingOrder + 6, PanelBorder, true);
-        text = CreateUIText(name + "_Text", panel, Vector3.zero, 72, 0.04f, TextAnchor.MiddleCenter,
-            AccentColor, UiTextSortingOrder + 6, true);
-        SetTextWithShadow(text, fallbackText);
+        GameOverButtonHandler handler = button.AddComponent<GameOverButtonHandler>();
+        handler.Init(onClick);
     }
+
 }
