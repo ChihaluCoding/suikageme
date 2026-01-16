@@ -15,16 +15,19 @@ public class Fruit : MonoBehaviour
     private SpriteRenderer spriteRenderer;
     private CircleCollider2D circleCollider;
     private Color baseColor;
+    private bool hasEnteredPlayfield;
 
     public int TypeIndex { get; private set; }
     public bool IsMerging { get; private set; }
     public float Radius => definition != null ? definition.radius : 0.5f;
+    public bool HasEnteredPlayfield => hasEnteredPlayfield;
 
     public void Setup(GameManager owner, int typeIndex, FruitDefinition def, bool isPreview)
     {
         manager = owner;
         TypeIndex = typeIndex;
         definition = def;
+        hasEnteredPlayfield = false;
 
         body = GetComponent<Rigidbody2D>();
         spriteRenderer = GetComponent<SpriteRenderer>();
@@ -50,6 +53,11 @@ public class Fruit : MonoBehaviour
             : baseColor;
 
         manager.RegisterFruit(this);
+    }
+
+    public void MarkEnteredPlayfield()
+    {
+        hasEnteredPlayfield = true;
     }
 
     public void SetPreview(bool preview)
