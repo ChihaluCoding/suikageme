@@ -39,6 +39,15 @@ public class GameManager : MonoBehaviour
     private const int UiSortingOrder = 20;
     private const int UiTextSortingOrder = 22;
     private const int DebugLineSortingOrder = 15;
+    private const int TitleSortingOrder = 100;
+    private const float TitleStartXNorm = -0.00417f;
+    private const float TitleStartYNorm = -0.12685f;
+    private const float TitleDiffXNorm = -0.00417f;
+    private const float TitleDiffYNorm = -0.49167f;
+    private const float TitleButtonWidthFrac = 0.20885f;
+    private const float TitleButtonHeightFrac = 0.14815f;
+    private const float TitleStartDelay = 0.08f;
+    private const float ReturnToTitleDelay = 0.08f;
 
     private static Sprite solidSprite;
 
@@ -104,8 +113,14 @@ public class GameManager : MonoBehaviour
     [Header("Audio")]
     public bool playBgm = true;
     [Range(0f, 1f)]
-    public float bgmVolume = 0.15f;
-    public string bgmResource = "bgm_loop";
+    public float bgmVolume1 = 0.35f; // 最大
+    [Range(0f, 1f)]
+    public float bgmVolume2 = 0.18f; // 中
+    [Range(0f, 1f)]
+    public float bgmVolume3 = 0.05f; // 最小
+    public string bgmResource = "bgm_gameplay";
+    public string dropSeResource = "otosu";
+    [Range(0f, 1f)] public float dropSeVolume = 1f;
     [Header("BGM Toggle UI")]
     public float bgmButtonSize = 1.4f;
     public float bgmButtonMargin = 0.4f;
@@ -191,9 +206,31 @@ public class GameManager : MonoBehaviour
     private Sprite titleButtonSprite;
     private Component bgmSource;
     private Type audioSourceType;
-    private Sprite bgmOnSprite;
+    private Sprite bgmOnSprite1;
+    private Sprite bgmOnSprite2;
+    private Sprite bgmOnSprite3;
     private Sprite bgmOffSprite;
     private SpriteRenderer bgmButtonRenderer;
+    private Collider2D bgmButtonCollider;
+    private bool bgmPaused;
+    private int bgmLevel = 2; // 0=off, 1~3=volume tiers
+    [Header("Title Screen")]
+    public string titleBackgroundResource = "title_screen";
+    public string titleStartResource = "title_start";
+    public string titleDifficultyResource = "title_difficulty";
+    private GameObject titleUi;
+    private Sprite titleBackgroundSprite;
+    private Sprite titleStartSprite;
+    private Sprite titleDifficultySprite;
+    private Collider2D titleStartCollider;
+    private Collider2D titleDifficultyCollider;
+    private bool isTitleScreen = true;
+    private bool gameStarted;
+    [Header("Failure Audio")]
+    public string failureClipResource = "zannen";
+    private AudioClip failureClip;
+    private AudioClip dropClip;
+    private bool createdLargestFruit;
     private bool canDrop = true;
     private bool spawnRoutineRunning = false;
     private bool isGameOver;
@@ -208,12 +245,23 @@ public class GameManager : MonoBehaviour
     {
         EnsureCamera();
         mainCamera = Camera.main;
+        if (!playBgm)
+        {
+            bgmLevel = 0;
+        }
+        else if (bgmLevel <= 0)
+        {
+            bgmLevel = 2;
+        }
         EnsureDefinitions();
         CacheMaxRadius();
         RefreshVerticalLayout();
         EnsureUiRoot();
         LoadBoxSprites();
         LoadUiSprites();
+        LoadDropClip();
+        LoadTitleSprites();
+        LoadFailureClip();
         CreateBackground();
         CreatePlayfield();
         CreateBinVisual();
@@ -223,23 +271,44 @@ public class GameManager : MonoBehaviour
         CreateChainPanel();
         CreateBgmToggleButton();
         CreateGameOverButtons();
+        CreateTitleScreen();
         EnsureBgm();
+        if (isTitleScreen)
+        {
+            Time.timeScale = 0f;
+        }
     }
 
     private void Start()
     {
         nextTypeIndex = GetRandomSpawnIndex();
+        if (isTitleScreen)
+        {
+            return;
+        }
         SpawnPreview();
     }
 
     private void Update()
     {
+        bool handledUiClick = HandleBgmToggleInput();
+
+        if (isTitleScreen && !gameStarted)
+        {
+            return;
+        }
+
         if (isGameOver)
         {
             if (Input.GetKeyDown(KeyCode.R))
             {
                 Restart();
             }
+            return;
+        }
+
+        if (handledUiClick)
+        {
             return;
         }
 
@@ -293,6 +362,11 @@ public class GameManager : MonoBehaviour
         Rigidbody2D body = merged.GetComponent<Rigidbody2D>();
         body.AddForce(Vector2.up * mergeImpulse, ForceMode2D.Impulse);
 
+        if (nextIndex >= fruitDefinitions.Count - 1)
+        {
+            createdLargestFruit = true;
+        }
+
         AddScore(fruitDefinitions[nextIndex].score);
     }
 
@@ -329,18 +403,82 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        if (Input.GetMouseButtonDown(0) || Input.GetKeyDown(KeyCode.Space))
+        if (Input.GetMouseButtonDown(0))
+        {
+            if (IsPointerOverUiButton())
+            {
+                return;
+            }
+            DropCurrent();
+            return;
+        }
+
+        if (Input.GetKeyDown(KeyCode.Space))
         {
             DropCurrent();
         }
     }
 
+    private bool HandleBgmToggleInput()
+    {
+        if (bgmButtonCollider == null || mainCamera == null)
+        {
+            return false;
+        }
+
+        if (Input.GetMouseButtonDown(0) && IsPointerOnBgmButton(Input.mousePosition))
+        {
+            ToggleBgm();
+            return true;
+        }
+
+        if (Input.touchCount > 0)
+        {
+            Touch touch = Input.GetTouch(0);
+            if (touch.phase == TouchPhase.Began && IsPointerOnBgmButton(touch.position))
+            {
+                ToggleBgm();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsPointerOnBgmButton(Vector3 screenPosition)
+    {
+        Vector3 world = mainCamera.ScreenToWorldPoint(screenPosition);
+        return bgmButtonCollider != null && bgmButtonCollider.OverlapPoint(new Vector2(world.x, world.y));
+    }
+
+    private bool IsPointerOverUiButton()
+    {
+        if (mainCamera == null || uiRoot == null)
+        {
+            return false;
+        }
+
+        Vector3 worldPoint = mainCamera.ScreenToWorldPoint(Input.mousePosition);
+        Vector2 point = new Vector2(worldPoint.x, worldPoint.y);
+        Collider2D[] hits = Physics2D.OverlapPointAll(point);
+        foreach (Collider2D hit in hits)
+        {
+            if (hit != null && hit.isTrigger && hit.transform.IsChildOf(uiRoot))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private void DropCurrent()
     {
+        PlayDropSe();
         Rigidbody2D body = currentFruit.GetComponent<Rigidbody2D>();
         body.bodyType = RigidbodyType2D.Dynamic;
         body.gravityScale = 1f;
-        body.angularDrag = 0.05f;
+        body.angularDamping = 0.05f;
         currentFruit.SetPreview(false);
         currentFruit.MarkDropped();
 
@@ -401,11 +539,15 @@ public class GameManager : MonoBehaviour
         Fruit fruit = go.AddComponent<Fruit>();
 
         body.mass = Mathf.Max(0.1f, def.radius * def.radius * 4f);
-        body.drag = 0.05f;
-        body.angularDrag = 0.05f;
+        body.linearDamping = 0.05f;
+        body.angularDamping = 0.05f;
         collider.radius = def.radius;
 
         fruit.Setup(this, typeIndex, def, isPreview);
+        if (!isPreview && typeIndex >= fruitDefinitions.Count - 1)
+        {
+            createdLargestFruit = true;
+        }
         return fruit;
     }
 
@@ -543,8 +685,33 @@ public class GameManager : MonoBehaviour
     {
         retryButtonSprite = LoadSpriteFlexible("retry_button");
         titleButtonSprite = LoadSpriteFlexible("title_button");
-        bgmOnSprite = LoadSpriteFlexible("bgm_on");
+        bgmOnSprite1 = LoadSpriteFlexible("bgm_on_1");
+        bgmOnSprite2 = LoadSpriteFlexible("bgm_on_2");
+        bgmOnSprite3 = LoadSpriteFlexible("bgm_on_3");
         bgmOffSprite = LoadSpriteFlexible("bgm_off");
+    }
+
+    private void LoadTitleSprites()
+    {
+        titleBackgroundSprite = LoadSpriteFlexible(titleBackgroundResource);
+        titleStartSprite = LoadSpriteFlexible(titleStartResource);
+        titleDifficultySprite = LoadSpriteFlexible(titleDifficultyResource);
+    }
+
+    private void LoadFailureClip()
+    {
+        if (!string.IsNullOrEmpty(failureClipResource))
+        {
+            failureClip = Resources.Load<AudioClip>(failureClipResource);
+        }
+    }
+
+    private void LoadDropClip()
+    {
+        if (!string.IsNullOrEmpty(dropSeResource))
+        {
+            dropClip = Resources.Load<AudioClip>(dropSeResource);
+        }
     }
 
     private Sprite LoadSpriteFlexible(string resourceName)
@@ -567,6 +734,74 @@ public class GameManager : MonoBehaviour
         }
 
         return Sprite.Create(texture, new Rect(0f, 0f, texture.width, texture.height), new Vector2(0.5f, 0.5f), texture.width);
+    }
+
+    private float GetBgmVolumeForLevel(int level)
+    {
+        switch (Mathf.Clamp(level, 0, 3))
+        {
+            case 1: return Mathf.Clamp01(bgmVolume1);
+            case 2: return Mathf.Clamp01(bgmVolume2);
+            case 3: return Mathf.Clamp01(bgmVolume3);
+            default: return 0f;
+        }
+    }
+
+    private void ApplyBgmState()
+    {
+        if (bgmLevel <= 0)
+        {
+            PauseBgm();
+            playBgm = false;
+            return;
+        }
+
+        playBgm = true;
+        EnsureBgm();
+        if (bgmSource != null && audioSourceType != null)
+        {
+            audioSourceType.GetProperty("volume")?.SetValue(bgmSource, GetBgmVolumeForLevel(bgmLevel));
+            if (bgmPaused)
+            {
+                audioSourceType.GetMethod("UnPause", Type.EmptyTypes)?.Invoke(bgmSource, null);
+            }
+            else
+            {
+                if (!IsBgmPlaying())
+                {
+                    audioSourceType.GetMethod("Play", Type.EmptyTypes)?.Invoke(bgmSource, null);
+                }
+            }
+            bgmPaused = false;
+        }
+    }
+
+    private Sprite GetBgmSpriteForLevel(int level)
+    {
+        switch (Mathf.Clamp(level, 0, 3))
+        {
+            case 1: return bgmOnSprite1 ?? bgmOnSprite2 ?? bgmOnSprite3 ?? bgmOffSprite;
+            case 2: return bgmOnSprite2 ?? bgmOnSprite3 ?? bgmOnSprite1 ?? bgmOffSprite;
+            case 3: return bgmOnSprite3 ?? bgmOnSprite2 ?? bgmOnSprite1 ?? bgmOffSprite;
+            default: return bgmOffSprite ?? bgmOnSprite1 ?? bgmOnSprite2 ?? bgmOnSprite3;
+        }
+    }
+
+    private bool IsBgmPlaying()
+    {
+        if (bgmSource == null || audioSourceType == null)
+        {
+            return false;
+        }
+
+        var isPlayingProp = audioSourceType.GetProperty("isPlaying");
+        if (isPlayingProp == null)
+        {
+            return false;
+        }
+
+        object value = isPlayingProp.GetValue(bgmSource);
+        return value is bool b && b;
     }
 
     private void EnsureUiRoot()
@@ -603,34 +838,139 @@ public class GameManager : MonoBehaviour
         Component source = gameObject.AddComponent(audioType);
         audioType.GetProperty("clip")?.SetValue(source, clip);
         audioType.GetProperty("loop")?.SetValue(source, true);
-        audioType.GetProperty("volume")?.SetValue(source, bgmVolume);
+        audioType.GetProperty("volume")?.SetValue(source, GetBgmVolumeForLevel(bgmLevel));
         audioType.GetMethod("Play", Type.EmptyTypes)?.Invoke(source, null);
         bgmSource = source;
         audioSourceType = audioType;
+        bgmPaused = false;
     }
 
     private void ToggleBgm()
     {
-        playBgm = !playBgm;
-
-        if (playBgm)
-        {
-            EnsureBgm();
-            if (bgmSource != null && audioSourceType != null)
-            {
-                audioSourceType.GetProperty("volume")?.SetValue(bgmSource, bgmVolume);
-                audioSourceType.GetMethod("Play", Type.EmptyTypes)?.Invoke(bgmSource, null);
-            }
-        }
-        else
-        {
-            if (bgmSource != null && audioSourceType != null)
-            {
-                audioSourceType.GetMethod("Stop", Type.EmptyTypes)?.Invoke(bgmSource, null);
-            }
-        }
-
+        bgmLevel = (bgmLevel + 1) % 4; // 0=off ->1->2->3->0
+        playBgm = bgmLevel > 0;
+        ApplyBgmState();
         UpdateBgmButtonVisual();
+    }
+
+    private void PauseBgm()
+    {
+        if (bgmSource != null && audioSourceType != null)
+        {
+            audioSourceType.GetMethod("Pause", Type.EmptyTypes)?.Invoke(bgmSource, null);
+            bgmPaused = true;
+        }
+    }
+
+    private void ResumeBgmIfEnabled()
+    {
+        if (!playBgm)
+        {
+            return;
+        }
+
+        EnsureBgm();
+        if (bgmSource != null && audioSourceType != null)
+        {
+            audioSourceType.GetProperty("volume")?.SetValue(bgmSource, GetBgmVolumeForLevel(bgmLevel));
+            if (bgmPaused)
+            {
+                audioSourceType.GetMethod("UnPause", Type.EmptyTypes)?.Invoke(bgmSource, null);
+            }
+            else
+            {
+                if (!IsBgmPlaying())
+                {
+                    audioSourceType.GetMethod("Play", Type.EmptyTypes)?.Invoke(bgmSource, null);
+                }
+            }
+            bgmPaused = false;
+        }
+    }
+
+    private void StartGame()
+    {
+        if (gameStarted)
+        {
+            return;
+        }
+
+        StartCoroutine(StartGameRoutine());
+    }
+
+    private IEnumerator StartGameRoutine()
+    {
+        gameStarted = true;
+        yield return new WaitForSecondsRealtime(TitleStartDelay);
+
+        isTitleScreen = false;
+        Time.timeScale = 1f;
+        createdLargestFruit = false;
+        ResumeBgmIfEnabled();
+
+        if (titleUi != null)
+        {
+            titleUi.SetActive(false);
+        }
+
+        canDrop = true;
+        spawnRoutineRunning = false;
+        if (currentFruit == null)
+        {
+            SpawnPreview();
+        }
+    }
+
+    private IEnumerator ReturnToTitleRoutine()
+    {
+        yield return new WaitForSecondsRealtime(ReturnToTitleDelay);
+
+        StopAllCoroutines();
+        Time.timeScale = 0f;
+        isGameOver = false;
+        isTitleScreen = true;
+        gameStarted = false;
+        canDrop = false;
+        spawnRoutineRunning = false;
+        createdLargestFruit = false;
+        PauseBgm();
+
+        foreach (Fruit fruit in new List<Fruit>(activeFruits))
+        {
+            if (fruit != null)
+            {
+                Destroy(fruit.gameObject);
+            }
+        }
+
+        currentFruit = null;
+        score = 0;
+        UpdateScoreText();
+
+        if (gameOverUi != null)
+        {
+            gameOverUi.SetActive(false);
+        }
+
+        if (titleUi == null)
+        {
+            CreateTitleScreen();
+        }
+
+        if (titleUi != null)
+        {
+            titleUi.SetActive(true);
+        }
+    }
+
+    private void ReturnToTitle()
+    {
+        StartCoroutine(ReturnToTitleRoutine());
+    }
+
+    private void OnDifficultyButton()
+    {
+        Debug.Log("Difficulty button pressed");
     }
 
     private void UpdateBgmButtonVisual()
@@ -640,7 +980,7 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        Sprite use = playBgm ? (bgmOnSprite ?? bgmOffSprite) : (bgmOffSprite ?? bgmOnSprite);
+        Sprite use = GetBgmSpriteForLevel(bgmLevel);
         float size = Mathf.Max(0.2f, bgmButtonSize);
         float scale;
         if (use != null)
@@ -924,7 +1264,7 @@ public class GameManager : MonoBehaviour
         bgmButtonRenderer = button.AddComponent<SpriteRenderer>();
         bgmButtonRenderer.sortingOrder = UiSortingOrder + 7;
 
-        Sprite use = playBgm ? (bgmOnSprite ?? bgmOffSprite) : (bgmOffSprite ?? bgmOnSprite);
+        Sprite use = GetBgmSpriteForLevel(bgmLevel);
         float scale = 1f;
         Vector2 colliderBaseSize = Vector2.one;
         if (use != null)
@@ -948,11 +1288,67 @@ public class GameManager : MonoBehaviour
         BoxCollider2D collider = button.AddComponent<BoxCollider2D>();
         collider.isTrigger = true;
         collider.size = colliderBaseSize;
-
-        GameOverButtonHandler handler = button.AddComponent<GameOverButtonHandler>();
-        handler.Init(ToggleBgm);
+        bgmButtonCollider = collider;
 
         UpdateBgmButtonVisual();
+    }
+
+    private void CreateTitleScreen()
+    {
+        if (mainCamera == null)
+        {
+            return;
+        }
+
+        Vector2 bounds = GetCameraBounds();
+        float fullWidth = bounds.x * 2f;
+        float fullHeight = bounds.y * 2f;
+
+        titleUi = new GameObject("TitleUI");
+        titleUi.transform.SetParent(transform);
+
+        GameObject bg = new GameObject("TitleBackground");
+        bg.transform.SetParent(titleUi.transform);
+        SpriteRenderer bgRenderer = bg.AddComponent<SpriteRenderer>();
+        bgRenderer.sprite = titleBackgroundSprite != null ? titleBackgroundSprite : GetSolidSprite();
+        bgRenderer.color = titleBackgroundSprite != null ? Color.white : new Color(1f, 0.78f, 0.88f, 1f);
+        bgRenderer.sortingOrder = TitleSortingOrder;
+        Vector2 spriteSize = bgRenderer.sprite.bounds.size;
+        float bgScale = Mathf.Max(fullWidth / Mathf.Max(0.0001f, spriteSize.x), fullHeight / Mathf.Max(0.0001f, spriteSize.y));
+        bg.transform.localScale = new Vector3(bgScale, bgScale, 1f);
+
+        Vector2 buttonSize = new Vector2(fullWidth * TitleButtonWidthFrac, fullHeight * TitleButtonHeightFrac);
+        Vector3 startPos = new Vector3(TitleStartXNorm * bounds.x, TitleStartYNorm * bounds.y, 0f);
+        Vector3 difficultyPos = new Vector3(TitleDiffXNorm * bounds.x, TitleDiffYNorm * bounds.y, 0f);
+
+        titleStartCollider = CreateTitleButton("TitleStartButton", titleStartSprite, startPos, buttonSize, StartGame);
+        titleDifficultyCollider = CreateTitleButton("TitleDifficultyButton", titleDifficultySprite, difficultyPos, buttonSize, OnDifficultyButton);
+    }
+
+    private Collider2D CreateTitleButton(string name, Sprite sprite, Vector3 localPosition, Vector2 targetSize, Action onClick)
+    {
+        GameObject button = new GameObject(name);
+        button.transform.SetParent(titleUi.transform);
+        button.transform.localPosition = localPosition;
+
+        SpriteRenderer renderer = button.AddComponent<SpriteRenderer>();
+        renderer.sprite = sprite != null ? sprite : GetSolidSprite();
+        renderer.sortingOrder = TitleSortingOrder + 1;
+
+        Vector2 spriteSize = renderer.sprite.bounds.size;
+        float scaleX = targetSize.x / Mathf.Max(0.0001f, spriteSize.x);
+        float scaleY = targetSize.y / Mathf.Max(0.0001f, spriteSize.y);
+        float scale = Mathf.Min(scaleX, scaleY);
+        button.transform.localScale = new Vector3(scale, scale, 1f);
+
+        BoxCollider2D collider = button.AddComponent<BoxCollider2D>();
+        collider.size = sprite != null ? sprite.bounds.size : Vector2.one;
+        collider.isTrigger = true;
+
+        GameOverButtonHandler handler = button.AddComponent<GameOverButtonHandler>();
+        handler.Init(onClick);
+
+        return collider;
     }
 
     private void UpdateNextPreview()
@@ -1253,7 +1649,7 @@ public class GameManager : MonoBehaviour
                     if (Time.time - fruit.DroppedAt >= gameOverGraceTime)
                     {
                         float stillSpeedSq = gameOverStillSpeed * gameOverStillSpeed;
-                        if (body.velocity.sqrMagnitude <= stillSpeedSq || body.IsSleeping())
+                        if (body.linearVelocity.sqrMagnitude <= stillSpeedSq || body.IsSleeping())
                         {
                             TriggerGameOver();
                             return;
@@ -1279,6 +1675,11 @@ public class GameManager : MonoBehaviour
     {
         isGameOver = true;
         Time.timeScale = 0f;
+        PauseBgm();
+        if (!createdLargestFruit)
+        {
+            PlayFailureClip();
+        }
         if (gameOverUi == null)
         {
             CreateGameOverButtons();
@@ -1289,12 +1690,34 @@ public class GameManager : MonoBehaviour
         }
     }
 
+    private void PlayFailureClip()
+    {
+        if (failureClip == null)
+        {
+            return;
+        }
+
+        AudioSource.PlayClipAtPoint(failureClip, Vector3.zero);
+    }
+
+    private void PlayDropSe()
+    {
+        if (dropClip == null)
+        {
+            return;
+        }
+
+        AudioSource.PlayClipAtPoint(dropClip, Vector3.zero, Mathf.Clamp01(dropSeVolume));
+    }
+
     private void Restart()
     {
         Time.timeScale = 1f;
         isGameOver = false;
         score = 0;
         UpdateScoreText();
+        createdLargestFruit = false;
+        ResumeBgmIfEnabled();
 
         foreach (Fruit fruit in new List<Fruit>(activeFruits))
         {
@@ -1336,7 +1759,7 @@ public class GameManager : MonoBehaviour
         CreateGameOverButton("RetryButton", retryButtonSprite, new Vector3(0f, topButtonY, 0f), buttonSize,
             "RETRY", ref retryText, Restart);
         CreateGameOverButton("TitleButton", titleButtonSprite, new Vector3(0f, -topButtonY, 0f), buttonSize,
-            "TITLE", ref titleText, null);
+            "TITLE", ref titleText, ReturnToTitle);
 
         gameOverUi.SetActive(false);
     }
